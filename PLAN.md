@@ -1,8 +1,8 @@
 # LeRobot PushT Lab — Project Plan
 
-**Status:** Phase 0 (Environment Setup) — not yet started
+**Status:** Phase 1 complete (Dataset Inspection) → next: Phase 2 (Diffusion Policy training)
 **Owner:** adimunot21
-**Started:** TBD
+**Started:** 2026-05-09
 **Target completion:** ~1 week of evenings/days, before SO-101 arm arrival
 
 ---
@@ -337,31 +337,58 @@ Course chapters per phase, written following the spec in CLAUDE.md / project gui
 
 ## 8. Data Contracts
 
-### 8.1 `lerobot/pusht` (TO BE VERIFIED IN PHASE 1)
+### 8.1 `lerobot/pusht` (VERIFIED Phase 1, 2026-05-09)
 
 **Source:** https://huggingface.co/datasets/lerobot/pusht
-**Format:** LeRobotDataset (parquet for tabular + mp4 for videos)
+**Format:** LeRobotDataset (parquet for tabular + mp4/av1 for video)
+**Full report:** `outputs/inspection/lerobot_pusht.md`
+**Inspector:** `scripts/inspect_pusht.py`
 
-**Expected fields** (verify all of these in Phase 1, do not assume):
+**Top-level magnitudes:**
 
-| Field | Expected dtype | Expected shape | Expected meaning |
-|---|---|---|---|
-| `observation.image` | uint8 / float32 | (3, 96, 96) | RGB frame, channels-first |
-| `observation.state` | float32 | (2,) | Agent (x, y) position in env coords |
-| `action` | float32 | (2,) | Target (x, y) position for agent |
-| `episode_index` | int64 | scalar | Episode this frame belongs to |
-| `frame_index` | int64 | scalar | Frame within episode |
-| `timestamp` | float32 | scalar | Time within episode |
-| `next.reward` | float32 | scalar | Step reward (env-defined) |
-| `next.done` | bool | scalar | Episode terminal flag |
+| Property | Value |
+|---|---|
+| Total episodes | 206 |
+| Total frames | 25 650 |
+| FPS | 10 |
+| Frames per episode | min=49, max=246, mean=124.5, median=122, std=35.7 |
+| Tasks | 1 (`Push the T-shaped block onto the T-shaped target.`) |
+| Robot type | unknown (sim) |
 
-**Expected magnitudes:** ~200 episodes, ~25k total frames. Action and state in env
-units (likely pixel coords or normalized).
+**Verified fields (output of `LeRobotDataset.__getitem__`):**
 
-**Known quirks (to verify):**
-- Image normalization: needs verification — uint8 [0,255] vs float32 [0,1]
-- Action chunking: dataset is per-frame, but Diffusion Policy and ACT consume action
-  chunks of length k. LeRobotDataset's `delta_timestamps` arg handles this.
+| Field | dtype | shape | range / value | meaning |
+|---|---|---|---|---|
+| `observation.image` | torch.float32 | (3, 96, 96) CHW | **[0, 1]** normalised | RGB frame. Storage layout HWC, dataloader returns CHW. |
+| `observation.state` | torch.float32 | (2,) | **~[44, 450]** raw env coords | Agent (x, y) position, pixel-space on a ~512-unit board. Not normalised. |
+| `action` | torch.float32 | (2,) | **~[44, 452]** raw env coords | Target (x, y) for agent. Same scale as state. |
+| `episode_index` | torch.int64 | scalar `()` | [0, 205] | Episode this frame belongs to |
+| `frame_index` | torch.int64 | scalar `()` | [0, 245] | Frame within episode |
+| `timestamp` | torch.float32 | scalar `()` | [0, ~24.5] s | `frame_index / fps` |
+| `next.reward` | torch.float32 | scalar `()` | [0, ~0.91] | Block-target overlap fraction (env-defined) |
+| `next.done` | torch.bool | scalar `()` | True at episode terminal | |
+| `next.success` | torch.bool | scalar `()` | Sparse — True only when overlap ≥95% threshold | NOT in original PLAN expectation |
+| `task` | str | scalar | task instruction string | NOT in original PLAN expectation |
+| `task_index` | torch.int64 | scalar `()` | always 0 (one task) | NOT in original PLAN expectation |
+| `index` | torch.int64 | scalar `()` | global frame index across dataset | NOT in original PLAN expectation |
+
+**Verified facts (resolved "to verify" questions):**
+- ✅ Image normalisation: float32 in [0, 1] (NOT uint8). Confirmed by sampling 200 frames.
+- ⚠️ State and action are **not** normalised — they're raw pixel coordinates ~[0, 512].
+  Implications:
+  - Diffusion Policy and ACT (LeRobot's implementations) apply their own input/output
+    normalisation internally, so this is invisible in those phases.
+  - **Phase 4 (from-scratch MLP-BC) must apply explicit normalisation** — fit
+    mean/std on the training set, normalise inputs, denormalise outputs at inference.
+- ⚠️ `next.success` is sparse: episodes can have `next.done=True` (terminated) but
+  `next.success=False` (didn't reach 95% overlap). Use `next.success` for binary success
+  rate, not `next.done`.
+- ✅ Episode lengths vary widely (49–246 frames). Don't assume fixed episode length when
+  building loaders / eval rollouts.
+
+**Action chunking note:** Dataset is per-frame. Diffusion Policy and ACT consume action
+chunks of length k via `LeRobotDataset(..., delta_timestamps={'action': [...]} )`. Inspect
+in Phase 2 when configuring the policies.
 
 ### 8.2 SO-101 Community Dataset (TO BE FILLED IN PHASE 7)
 
