@@ -1,0 +1,27 @@
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+.ipynb_checkpoints/
+
+# secrets
+.env
+
+# large files — not tracked (leading / anchors to repo root only)
+/data/
+/checkpoints/
+/logs/
+/outputs/eval/
+
+# model weights
+*.pt
+*.pth
+*.safetensors
+
+# wandb run artifacts
+wandb/
+
+# build
+*.egg-info/
+dist/
+build/
