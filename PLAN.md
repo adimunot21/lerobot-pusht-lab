@@ -141,7 +141,7 @@ README, reproduce all three trained policies and the comparison numbers within a
 | **lerobot** | Dataset format, ACT/Diffusion policies, train/eval CLI | The whole point. Community standard for low-cost robotics. Uniform API across simulated and real arms (SO-101). |
 | **gym-pusht** | Eval environment | LeRobot's standard eval target for PushT. Provides 95%-overlap success criterion used in published baselines. Alternative: roll a custom env. Don't. |
 | **huggingface_hub** | Dataset/model versioning + hosting | Versioned, public, free. Same Hub the SO-101 community uses. Alternative: DVC + S3 = more infra, no community network effect. |
-| **wandb** | Experiment tracking | LeRobot logs to wandb out of the box. Free for personal use. Alternative: TensorBoard (less rich, no cloud), MLflow (more overhead). |
+| **TensorBoard** | Experiment tracking | Local, no account, no quota. Chosen over wandb because my wandb free-tier quota is exhausted. Tradeoff: no cloud sync, no easy cross-machine run comparison, less rich UI than wandb. Acceptable for a single-machine portfolio project. Alternative: wandb (richer UI, LeRobot's published runs are on wandb — useful for sanity-checking loss curves), MLflow (more setup overhead for similar feature set). |
 | **pytest** | Testing | Standard. Alternative: unittest, but pytest's fixtures and parametrize are worth it. |
 | **ruff** | Lint + format | Replaces black + isort + flake8 in one fast tool. Alternative: black-only is fine but ruff is strictly more capable now. |
 | **python-dotenv** | Loading `.env` for HF token, wandb key | Standard. Alternative: bare `os.environ` reading, but dotenv handles missing files cleanly. |
@@ -377,7 +377,7 @@ To document in Phase 7 after running `scripts/inspect_so101.py`.
 | ACT's 52M params don't fit | Same fallback ladder. ACT does have a smaller config option. |
 | LeRobot CLI flags / API change between install time and a later phase | Pin versions immediately after Phase 0 succeeds (`pip freeze > requirements.txt`). Don't `pip install -U` mid-project. |
 | HF Hub rate limits when pushing checkpoints | Unlikely at this scale (3 models, ~MB-GB each). Use `huggingface_hub` upload with retry. |
-| wandb login interactive prompt blocks scripts | Set `WANDB_API_KEY` in `.env`, source it before scripts. |
+| LeRobot defaults to wandb logger; we don't have a wandb account | Disable wandb in train configs (`wandb.enable=false`) and verify TensorBoard is the active logger before kicking off any long run. Verify in Phase 2 smoke test. |
 | Inspection script for SO-101 dataset fails because of an unexpected schema (e.g. dataset uses different LeRobotDataset version) | Inspection IS the discovery step. Failure here is informative — it's exactly what we're prepping for. |
 | GTX 1650 training is slow vs 3080 baselines (LeRobot's published runs) | Reduce step count to "in the right ballpark" rather than reproducing full training budgets. Document the gap. |
 | CUDA version mismatch (driver 580 says CUDA 13, PyTorch wheels are cu124) | This is fine. PyTorch wheels bundle their own CUDA runtime. Verify with `torch.cuda.is_available()` smoke test. |
