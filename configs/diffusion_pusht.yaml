@@ -1,0 +1,99 @@
+# Diffusion Policy training config for lerobot/pusht
+#
+# All non-default values are annotated with their reason.
+# Hardware target: NVIDIA GTX 1650 / 4 GB VRAM (see PLAN.md §3 for fallback ladder).
+#
+# Usage:
+#   lerobot-train --config_path=configs/diffusion_pusht.yaml          # full run
+#   lerobot-train --config_path=configs/diffusion_pusht.yaml \
+#       --steps=100 --eval_freq=1000 --save_freq=1000 \
+#       --output_dir=checkpoints/diffusion_pusht_smoke               # smoke test
+# Wrapped by: scripts/train_diffusion.sh
+# Format: draccus YAML (LeRobot 0.5.1 — `type:` is the discriminator field for
+# policy/env subclasses, mirroring the dataclass hierarchy).
+
+# ─── Dataset ─────────────────────────────────────────────────────────────────
+dataset:
+  repo_id: lerobot/pusht
+  # All other fields default. The DiffusionConfig preset auto-fills
+  # `delta_timestamps` to fetch action chunks of length `horizon`.
+
+# ─── Environment (for in-training eval rollouts) ─────────────────────────────
+env:
+  type: pusht
+  # Match env render resolution to the dataset's 96×96. Default is 384×384,
+  # which would force LeRobot's eval pipeline to downsample at every step —
+  # wasteful and a potential silent-error surface if the resize differs from
+  # what the policy's vision encoder was trained on.
+  observation_width: 96
+  observation_height: 96
+  # episode_length=300 default — fine; PushT episodes terminate on success.
+
+# ─── Policy ──────────────────────────────────────────────────────────────────
+policy:
+  type: diffusion
+  device: cuda
+  # AMP halves activation memory at no measurable quality cost on PushT.
+  # Mandatory on 4 GB VRAM. Default is false because LeRobot supports CPU-only
+  # training where AMP would hurt; we have CUDA so we enable it.
+  use_amp: true
+  # Default is true → would auto-upload mid-training. We push manually in Phase 6.
+  push_to_hub: false
+  #
+  # Shrink U-Net width: LeRobot's default (512, 1024, 2048) is 263M params,
+  # which exceeds 4 GB VRAM (Adam state alone needs ~3 GB). The original
+  # Diffusion Policy paper (Chi et al. 2023) used (256, 512, 1024) for image
+  # tasks → ~75M params, fits comfortably. Smoke test 2026-05-09 confirmed
+  # OOM at the larger size during optimizer.step().
+  down_dims: [256, 512, 1024]
+  #
+  # Other algorithm hyperparams default to the paper recipe. Listed explicitly
+  # here as a paper trail, not as overrides:
+  #   horizon=16, n_action_steps=8, n_obs_steps=2
+  #     → predict 16 actions, execute 8, condition on 2 obs frames.
+  #     → standard receding-horizon control. Shortening hurts coherence;
+  #       lengthening makes learning harder.
+  #   vision_backbone=resnet18  → ~11M params; ~10× smaller than resnet50 and
+  #     fine for 96×96 inputs. resnet50 would push us back into OOM territory.
+  #   num_train_timesteps=100, noise_scheduler=DDPM, beta_schedule=squaredcos_cap_v2
+  #     → standard DDPM with cosine-squared β schedule (improves over linear at high T).
+  #   optimizer_lr=1e-4, weight_decay=1e-6, scheduler=cosine, warmup=500
+  #     → paper recipe. Adam variants only differ in 3rd decimal on this task.
+
+# ─── Training loop ───────────────────────────────────────────────────────────
+batch_size: 8         # default; conservative for 4 GB VRAM. After smoke test, if
+                      # peak VRAM stays below ~3 GB we can try 16. Published baselines
+                      # use 64 on 24 GB GPUs.
+num_workers: 4        # default; leaves 2 cores for the main process on 6-core CPU.
+
+steps: 50000          # Half of LeRobot's default (100k), ¼ of published (200k).
+                      # GTX 1650 is ~3× slower than the 3080 used in published runs;
+                      # 50k steps ≈ 10–15 h overnight.
+
+seed: 1000            # default — reproducibility.
+log_freq: 200         # default — TensorBoard scalar every 200 steps.
+eval_freq: 10000      # 5 in-training evals across the run. Each eval ≈ 10 min on 1650.
+save_freq: 10000      # 5 checkpoints across the run. Last one is the deliverable.
+save_checkpoint: true
+
+output_dir: checkpoints/diffusion_pusht
+job_name: diffusion_pusht
+
+# ─── In-training eval ────────────────────────────────────────────────────────
+eval:
+  n_episodes: 20      # 20 is enough to detect "is the policy alive?". Final
+                      # 50-episode eval (with confidence intervals) is in Phase 5.
+  batch_size: 1       # one rollout at a time — gym-pusht is CPU-fast,
+                      # parallelism would just thrash threads.
+
+# ─── Logging ─────────────────────────────────────────────────────────────────
+wandb:
+  enable: true        # Required for any plottable logs — LeRobot 0.5.1 has no
+                      # TensorBoard fallback (verified Phase 2 smoke test).
+  mode: offline       # MUST be set here, not via WANDB_MODE env var — LeRobot's
+                      # WandBLogger passes mode= explicitly to wandb.init(),
+                      # overriding the env var. "offline" writes to ./wandb/
+                      # locally, never contacts cloud, no auth needed.
+                      # Sync later via `wandb sync ./wandb/offline-run-*`.
+  project: lerobot-pusht-lab   # Default is "lerobot"; we namespace per-project so
+                                # any future cloud sync goes to a sensible bucket.

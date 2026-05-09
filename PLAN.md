@@ -56,11 +56,33 @@ README, reproduce all three trained policies and the comparison numbers within a
 | 32GB RAM | Comfortable. Can cache full PushT dataset in memory (~5GB). |
 | 1TB SSD | Plenty for datasets + checkpoints. |
 
-**VRAM fallback ladder** (use in order if image-based OOMs):
-1. Image obs, batch=32, AMP on
-2. Image obs, batch=16, AMP on, gradient accumulation 2x
-3. Image obs, batch=8, AMP on, gradient accumulation 4x
-4. State-only (`pusht_keypoints` dataset), batch=64
+**VRAM fallback ladder** (revised after Phase 2 smoke test, 2026-05-09):
+
+The original ladder assumed batch size was the binding lever. It isn't — for
+LeRobot 0.5.1's default Diffusion Policy (263M params with `down_dims=(512,
+1024, 2048)`), Adam state alone (3× model size) is ~3.1 GB, which overflows
+the 1650's 3.63 GiB usable memory **before** any batch-dependent activations
+are allocated. Model architecture is the binding lever for diffusion; batch
+size is the lever for state-only / smaller policies.
+
+Diffusion Policy (image obs):
+1. `down_dims=(256, 512, 1024)`, batch=8, AMP on   ← original DP-paper recipe;
+                                                     LeRobot's default is
+                                                     larger than the paper.
+2. `down_dims=(128, 256, 512)`, batch=8, AMP on
+3. State-only (`pusht_keypoints` dataset), `n_obs_steps=2`, batch=64
+
+ACT (Phase 3, ~52M params — tighter than DP at the U-Net but no Adam-state
+blow-up):
+1. Image obs, batch=8, AMP on
+2. Image obs, batch=8, AMP on, gradient accumulation 2x (effective 16)
+3. State-only
+
+General techniques: enable AMP unconditionally, set
+`PYTORCH_ALLOC_CONF=expandable_segments:True` in the wrapper script to reduce
+fragmentation (recommended by the OOM error), prefer `--num_workers=2` over 4
+if dataloader memory pressure is observed (we have 32 GB system RAM though,
+so this is unlikely to bind).
 
 ---
 
@@ -141,7 +163,7 @@ README, reproduce all three trained policies and the comparison numbers within a
 | **lerobot** | Dataset format, ACT/Diffusion policies, train/eval CLI | The whole point. Community standard for low-cost robotics. Uniform API across simulated and real arms (SO-101). |
 | **gym-pusht** | Eval environment | LeRobot's standard eval target for PushT. Provides 95%-overlap success criterion used in published baselines. Alternative: roll a custom env. Don't. |
 | **huggingface_hub** | Dataset/model versioning + hosting | Versioned, public, free. Same Hub the SO-101 community uses. Alternative: DVC + S3 = more infra, no community network effect. |
-| **TensorBoard** | Experiment tracking | Local, no account, no quota. Chosen over wandb because my wandb free-tier quota is exhausted. Tradeoff: no cloud sync, no easy cross-machine run comparison, less rich UI than wandb. Acceptable for a single-machine portfolio project. Alternative: wandb (richer UI, LeRobot's published runs are on wandb — useful for sanity-checking loss curves), MLflow (more setup overhead for similar feature set). |
+| **wandb (offline mode)** | Experiment tracking | LeRobot 0.5.1 has no TensorBoard fallback — disabling wandb produces zero plottable logs (verified Phase 2 smoke test 2026-05-10). Wandb's `WANDB_MODE=offline` writes runs to local `./wandb/` only, never contacts the cloud, so quota doesn't apply. Same rich logging as the published baselines (loss curves, GPU stats, system metrics). Can be synced to wandb.ai later if quota frees up via `wandb sync ./wandb/offline-run-*`. Alternative: tee stdout + custom plot script (crude, no GPU stats). |
 | **pytest** | Testing | Standard. Alternative: unittest, but pytest's fixtures and parametrize are worth it. |
 | **ruff** | Lint + format | Replaces black + isort + flake8 in one fast tool. Alternative: black-only is fine but ruff is strictly more capable now. |
 | **python-dotenv** | Loading `.env` for HF token, wandb key | Standard. Alternative: bare `os.environ` reading, but dotenv handles missing files cleanly. |
@@ -404,7 +426,7 @@ To document in Phase 7 after running `scripts/inspect_so101.py`.
 | ACT's 52M params don't fit | Same fallback ladder. ACT does have a smaller config option. |
 | LeRobot CLI flags / API change between install time and a later phase | Pin versions immediately after Phase 0 succeeds (`pip freeze > requirements.txt`). Don't `pip install -U` mid-project. |
 | HF Hub rate limits when pushing checkpoints | Unlikely at this scale (3 models, ~MB-GB each). Use `huggingface_hub` upload with retry. |
-| LeRobot defaults to wandb logger; we don't have a wandb account | Disable wandb in train configs (`wandb.enable=false`) and verify TensorBoard is the active logger before kicking off any long run. Verify in Phase 2 smoke test. |
+| LeRobot 0.5.1 has no TensorBoard fallback — `wandb.enable=false` produces zero plottable logs | Use wandb in offline mode (`WANDB_MODE=offline` env + `wandb.enable=true`). Local-only, no quota cost. Verified during Phase 2 smoke test. |
 | Inspection script for SO-101 dataset fails because of an unexpected schema (e.g. dataset uses different LeRobotDataset version) | Inspection IS the discovery step. Failure here is informative — it's exactly what we're prepping for. |
 | GTX 1650 training is slow vs 3080 baselines (LeRobot's published runs) | Reduce step count to "in the right ballpark" rather than reproducing full training budgets. Document the gap. |
 | CUDA version mismatch (driver 580 says CUDA 13, PyTorch wheels are cu124) | This is fine. PyTorch wheels bundle their own CUDA runtime. Verify with `torch.cuda.is_available()` smoke test. |
