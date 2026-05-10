@@ -61,19 +61,32 @@ policy:
   #     → paper recipe. Adam variants only differ in 3rd decimal on this task.
 
 # ─── Training loop ───────────────────────────────────────────────────────────
-batch_size: 8         # default; conservative for 4 GB VRAM. After smoke test, if
-                      # peak VRAM stays below ~3 GB we can try 16. Published baselines
-                      # use 64 on 24 GB GPUs.
+batch_size: 64        # MATCHES LeRobot's published recipe (lerobot/diffusion_pusht
+                      # reports 65.4% success on 500-episode eval at this batch).
+                      # Originally I used batch=8 + 50K steps = 400K samples seen,
+                      # which produced 5% success — under-trained by 32× vs published.
+                      # Smoke sweep on the 1650 (2026-05-10):
+                      #   batch=8   → 1.6 GB peak, 8.3 step/s,  66 samples/s
+                      #   batch=32  → 1.7 GB peak, 5.5 step/s, 174 samples/s
+                      #   batch=48  → 1.8 GB peak, 4.4 step/s, 209 samples/s
+                      #   batch=64  → 2.9 GB peak, 3.7 step/s, 237 samples/s ← chosen
+                      # 64 is the sweet spot — matches the recipe with ~1.2 GB headroom,
+                      # maximises samples/sec, fits on a 4 GB card. LeRobot 0.5.1 does
+                      # not expose gradient accumulation, so batch == effective batch.
 num_workers: 4        # default; leaves 2 cores for the main process on 6-core CPU.
 
-steps: 50000          # Half of LeRobot's default (100k), ¼ of published (200k).
-                      # GTX 1650 is ~3× slower than the 3080 used in published runs;
-                      # 50k steps ≈ 10–15 h overnight.
+steps: 200000         # Matches LeRobot's published recipe: 200K × 64 = 12.8M samples.
+                      # At 3.7 step/s on the 1650 ≈ 15 h pure training; +5 evals at
+                      # ~13 min each = ~16–17 h total wall time.
+                      # Justification: the 50K-step run on 2026-05-10 left loss still
+                      # descending (0.026 → 0.023 in last 10K) and the cosine LR schedule
+                      # had decayed lr→2.5e-8 — both classic signs of severe under-training.
+                      # 200K with the schedule scaled to the new total length fixes it.
 
 seed: 1000            # default — reproducibility.
-log_freq: 200         # default — TensorBoard scalar every 200 steps.
-eval_freq: 10000      # 5 in-training evals across the run. Each eval ≈ 10 min on 1650.
-save_freq: 10000      # 5 checkpoints across the run. Last one is the deliverable.
+log_freq: 200         # default — wandb scalar every 200 steps.
+eval_freq: 40000      # 5 in-training evals (every 20% of training). Each eval ≈ 13 min.
+save_freq: 40000      # 5 checkpoints across the run. Last is the deliverable for Phase 5.
 save_checkpoint: true
 
 output_dir: checkpoints/diffusion_pusht

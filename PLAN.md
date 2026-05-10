@@ -266,18 +266,25 @@ a full data contract. PLAN.md's "Data Contracts" section updated with verified f
 - One image saved to `outputs/inspection/lerobot_pusht_sample.png`
 - Episode boundaries verified — total episodes, frames per episode distribution
 
-### Phase 2 — Diffusion Policy Training (1 day + overnight)
+### Phase 2 — Diffusion Policy Training (~16–17 h, two-night job)
 
-**Deliverable:** `lerobot-train` invocation in `scripts/train_diffusion.sh` with our
-config override. Trains for sufficient steps (target: published-baseline ballpark).
-Checkpoint saved to `checkpoints/diffusion_pusht/`. Training tracked in wandb.
+**Deliverable:** `lerobot-train` invocation via `scripts/train_diffusion.sh` with our
+YAML config. Trained for **200K steps × batch 64 = 12.8M samples**, matching LeRobot's
+published `lerobot/diffusion_pusht` recipe (which reports 65.4% success on 500 episodes).
+Checkpoint saved to `checkpoints/diffusion_pusht/`. Tracked in wandb (offline mode).
+
+**Initial attempt (2026-05-10) produced 5% success at 50K steps × batch 8 = 400K samples
+(under-trained 32× vs published).** Revised to match LeRobot's recipe; only remaining
+gap is U-Net width (256/512/1024 vs published 512/1024/2048 — needed to fit 4 GB VRAM).
+
+**Target success rate:** ≥60% (within a few % of LeRobot's 65.4%).
 
 **Checkpoints:**
-- 100-step smoke test runs without OOM
-- VRAM headroom verified (`watch nvidia-smi` during smoke)
-- Full overnight run completes without crashing
-- Loss curve declining as expected (compare to published wandb runs)
-- Final eval (in-train, every N steps) shows non-zero success rate
+- 50-step smoke test for each candidate batch size — verify VRAM fits ✅
+- VRAM peak < 3.5 GB at chosen batch (1650 has 3.63 GB usable) ✅
+- Full ~16h run completes without crashing
+- Loss curve declines steadily and the cosine LR schedule plays out fully (lr → ~0 only at the very end)
+- Final 20-episode in-training eval shows ≥40% success (Phase 5 does the proper 50-episode eval with CIs)
 
 ### Phase 3 — ACT Training (1 day + overnight)
 
