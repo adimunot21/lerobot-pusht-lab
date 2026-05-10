@@ -1,0 +1,105 @@
+# ACT (Action Chunking Transformer) training config for lerobot/pusht.
+#
+# Hardware target: NVIDIA GTX 1650 / 4 GB VRAM.
+#
+# Status (2026-05-10): NOT YET SMOKE-TESTED — Diffusion training was on the GPU
+# at the time of writing. Before launching the full run, do:
+#
+#   ./scripts/train_act.sh \
+#       --steps=50 --eval_freq=1000 --save_freq=1000 \
+#       --batch_size={8,16,32,64} \
+#       --output_dir=checkpoints/act_pusht_smoke
+#
+# to find the largest batch that fits in 4 GB. Update batch_size below to match.
+#
+# Usage:
+#   lerobot-train --config_path=configs/act_pusht.yaml          # full run
+# Wrapped by: scripts/train_act.sh
+
+# ─── Dataset ─────────────────────────────────────────────────────────────────
+dataset:
+  repo_id: lerobot/pusht
+
+# ─── Environment (for in-training eval rollouts) ─────────────────────────────
+env:
+  type: pusht
+  observation_width: 96         # match dataset (same fix applied to Diffusion config)
+  observation_height: 96
+
+# ─── Policy ──────────────────────────────────────────────────────────────────
+policy:
+  type: act
+  device: cuda
+  use_amp: true                 # mandatory for 4 GB VRAM (same reason as Diffusion)
+  push_to_hub: false            # Phase 6 publishes manually
+  #
+  # ACT hyperparameters — every value below is the LeRobot 0.5.1 default,
+  # listed explicitly as a paper trail of the recipe we're evaluating.
+  # If we deviate from defaults later (e.g. n_decoder_layers=7 per community
+  # workaround), this block is the single place to do it.
+  #
+  # chunk_size=100, n_action_steps=100, n_obs_steps=1
+  #   → predict 100 future actions, execute ALL of them before re-planning.
+  #     Open-loop within the chunk. PushT episodes are 49-246 frames so this
+  #     means re-planning 0-2 times per episode.
+  #     If eval rollouts show "policy gets stuck partway through", reduce to 50.
+  # vision_backbone=resnet18, pretrained_backbone_weights=ImageNet
+  #   → ACT uses transfer learning from ImageNet (Diffusion didn't). Empirically
+  #     helps initial loss but matters less by the end of training.
+  # dim_model=512, n_heads=8, dim_feedforward=3200
+  #   → standard Transformer-base sizing (think DETR scale, since ACT is
+  #     architecturally a DETR with action queries).
+  # n_encoder_layers=4, n_decoder_layers=1
+  #   → asymmetric: deeper encoder (visual reasoning) + shallow decoder
+  #     (action generation). LeRobot default. Community report (issue #549)
+  #     suggests n_decoder_layers=7 hits 44% on PushT vs default's lower number;
+  #     try this if the default underperforms at the first eval.
+  # use_vae=true, latent_dim=32, n_vae_encoder_layers=4, kl_weight=10.0
+  #   → CVAE for multimodality. kl_weight=10 is the most-tweaked knob in ACT —
+  #     too high → posterior collapse (z uninformative, mode-averaging returns);
+  #     too low → at-inference samples drift off-distribution. Default is
+  #     known-OK for diverse demonstrations.
+  # optimizer_lr=1e-5, optimizer_lr_backbone=1e-5, weight_decay=1e-4
+  #   → ACT uses much lower lr than Diffusion (1e-4) — Transformer convention.
+  #     The backbone gets the same lr as the rest (no separate "freeze then
+  #     fine-tune" phase). Default works.
+  # dropout=0.1
+  #   → standard regularisation. Inside both encoder and decoder Transformer blocks.
+  #
+  # No overrides below — pure LeRobot defaults. We're explicitly evaluating
+  # whether the default recipe matches the published model. If/when we tweak,
+  # add fields here with reason-comments.
+
+# ─── Training loop ───────────────────────────────────────────────────────────
+batch_size: 16        # CONSERVATIVE INITIAL GUESS — smoke-test before committing.
+                      # ACT default is 8; Diffusion fit batch=64 with the same
+                      # 4 GB budget but its U-Net is more activation-light than
+                      # ACT's full O(L²) Transformer attention with chunk_size=100.
+                      # Plan: smoke-test {16, 32, 64}, pick max-that-fits, update.
+num_workers: 4        # default; same reasoning as Diffusion config.
+
+steps: 100000         # LeRobot's ACT default. At an estimated ~5 steps/sec on the
+                      # 1650 → ~5.5 h pure training. Plus 5 evals at ~13 min = ~6.5 h.
+                      # If this gets us into the 25-45% success range (community-reported
+                      # ceiling for ACT on PushT), we're done. If we're at <10%, retry
+                      # with steps=200K and possibly n_decoder_layers=7.
+
+seed: 1000            # match Diffusion + MLP-BC configs for fair comparison
+log_freq: 200
+eval_freq: 20000      # 5 in-training evals
+save_freq: 20000      # 5 checkpoints; last is the deliverable
+save_checkpoint: true
+
+output_dir: checkpoints/act_pusht
+job_name: act_pusht
+
+# ─── In-training eval ────────────────────────────────────────────────────────
+eval:
+  n_episodes: 20
+  batch_size: 1
+
+# ─── Logging ─────────────────────────────────────────────────────────────────
+wandb:
+  enable: true
+  mode: offline       # local-only — same setup as Diffusion (project memory)
+  project: lerobot-pusht-lab
