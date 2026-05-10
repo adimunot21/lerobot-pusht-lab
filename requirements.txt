@@ -57,7 +57,6 @@ labmaze==1.0.6
 lark==1.3.1
 lazy-loader==0.5
 lerobot @ git+https://github.com/huggingface/lerobot.git@f90db58c15a998a8ae37780ccd255bbde0130e00
--e git+ssh://git@github.com/adimunot21/lerobot-pusht-lab.git@64233e1cb3ddedc57618cfccf6eedcf42b520662#egg=lerobot_pusht_lab
 lxml==6.0.2
 markdown-it-py==4.0.0
 MarkupSafe==3.0.2
