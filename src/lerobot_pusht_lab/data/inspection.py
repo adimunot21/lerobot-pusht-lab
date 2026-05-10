@@ -185,6 +185,10 @@ def evenly_spaced_indices(n_total: int, n_samples: int) -> list[int]:
     """Return n_samples integer indices spanning [0, n_total)."""
     if n_samples <= 0:
         return []
+    if n_samples == 1:
+        # Only return a single point — pick the first frame. (Returning the
+        # midpoint is also defensible; first is more intuitive for "show one sample".)
+        return [0]
     if n_samples >= n_total:
         return list(range(n_total))
     return [int(i * (n_total - 1) / (n_samples - 1)) for i in range(n_samples)]
