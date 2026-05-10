@@ -1,0 +1,150 @@
+#!/usr/bin/env python
+"""Phase 5 top-level: evaluate all 3 trained policies + write comparison report.
+
+Discovers checkpoints under ``checkpoints/{diffusion_pusht,act_pusht,mlp_bc_pusht}/``,
+runs ``run_evaluation`` for each (deterministic seeds across policies → identical
+initial states), saves per-policy ``eval_metrics.json``, then renders the
+comparison report to ``outputs/comparison/``.
+
+Skips any policy whose checkpoint isn't present yet — useful while phases
+are still in progress.
+
+Usage::
+
+    # Default: 50 episodes per policy, GPU
+    python scripts/eval_all.py
+
+    # Smoke (5 episodes per policy, CPU — won't compete with training)
+    python scripts/eval_all.py --n-episodes 5 --device cpu
+
+Caveat: with default 50 episodes:
+  - MLP-BC eval: ~30 sec on CPU (no chunking, single forward per step)
+  - ACT eval:    ~3-5 min on GPU (single forward per step + 100-step chunking)
+  - Diffusion:   ~15-20 min on GPU (100 denoising steps per chunk)
+Total ~25 min on GPU. Run after the GPU is free.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import logging
+import sys
+from datetime import datetime
+from pathlib import Path
+
+from lerobot_pusht_lab.eval.compare import write_full_comparison
+from lerobot_pusht_lab.eval.lerobot_adapter import LeRobotPolicyAdapter
+from lerobot_pusht_lab.eval.runner import EvalMetrics, MLPBCAdapter, run_evaluation
+
+
+# Default checkpoint discovery — update if the project layout changes.
+DEFAULT_POLICIES: list[dict] = [
+    {
+        "name": "diffusion_pusht",
+        "kind": "lerobot",
+        "checkpoint": "checkpoints/diffusion_pusht/checkpoints/last",
+    },
+    {
+        "name": "act_pusht",
+        "kind": "lerobot",
+        "checkpoint": "checkpoints/act_pusht/checkpoints/last",
+    },
+    {
+        "name": "mlp_bc_pusht",
+        "kind": "mlp_bc",
+        "checkpoint": "checkpoints/mlp_bc_pusht/checkpoints/last",
+    },
+]
+
+
+def _eval_one(spec: dict, args: argparse.Namespace) -> EvalMetrics | None:
+    """Run eval for a single policy. Returns None if the checkpoint is missing."""
+    logger = logging.getLogger("eval_all")
+    ckpt = Path(spec["checkpoint"])
+    if not ckpt.exists():
+        logger.warning("[skip] %s — checkpoint not found at %s", spec["name"], ckpt)
+        return None
+
+    logger.info("[eval] %s (%s) from %s", spec["name"], spec["kind"], ckpt)
+    if spec["kind"] == "mlp_bc":
+        # MLP-BC is tiny — CPU is fine even when GPU is requested
+        device = "cpu" if args.device == "cuda" else args.device
+        adapter = MLPBCAdapter.from_checkpoint(ckpt, device=device)
+    elif spec["kind"] == "lerobot":
+        adapter = LeRobotPolicyAdapter.from_checkpoint(ckpt, name=spec["name"], device=args.device)
+    else:
+        raise ValueError(f"unknown policy kind {spec['kind']!r}")
+
+    metrics = run_evaluation(
+        policy=adapter,
+        n_episodes=args.n_episodes,
+        base_seed=args.base_seed,
+        success_threshold=args.success_threshold,
+        max_steps_per_episode=args.max_steps,
+    )
+    out_dir = args.eval_dir / spec["name"]
+    out_dir.mkdir(parents=True, exist_ok=True)
+    metrics.save(out_dir / "eval_metrics.json")
+    return metrics
+
+
+def parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--n-episodes", type=int, default=50)
+    p.add_argument("--base-seed", type=int, default=100000)
+    p.add_argument("--success-threshold", type=float, default=0.95)
+    p.add_argument("--max-steps", type=int, default=300)
+    p.add_argument("--device", default="cuda")
+    p.add_argument("--eval-dir", type=Path, default=Path("outputs/eval"))
+    p.add_argument("--comparison-dir", type=Path, default=Path("outputs/comparison"))
+    p.add_argument("--policies-config",
+                   type=Path,
+                   help="Optional JSON file overriding DEFAULT_POLICIES (list of {name, kind, checkpoint} dicts).")
+    p.add_argument("-v", "--verbose", action="store_true")
+    return p.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.INFO,
+        format="%(asctime)s [%(name)s] %(message)s",
+        datefmt="%H:%M:%S",
+    )
+    logger = logging.getLogger("eval_all")
+
+    if args.policies_config:
+        specs = json.loads(args.policies_config.read_text())
+    else:
+        specs = DEFAULT_POLICIES
+
+    metrics: list[EvalMetrics] = []
+    for spec in specs:
+        m = _eval_one(spec, args)
+        if m is not None:
+            metrics.append(m)
+
+    if not metrics:
+        logger.error("no policies were evaluated — train something first")
+        return 1
+
+    logger.info("rendering comparison report for %d policies", len(metrics))
+    notes = (
+        f"_Generated: {datetime.now().isoformat(timespec='seconds')}_  \n"
+        f"_Generated by: `scripts/eval_all.py` (n_episodes={args.n_episodes}, "
+        f"success_threshold={args.success_threshold:.2f})_\n"
+    )
+    outs = write_full_comparison(
+        metrics, args.comparison_dir,
+        title="PushT — Diffusion Policy vs ACT vs MLP-BC",
+        notes=notes,
+    )
+    logger.info("report:        %s", outs.report_md)
+    logger.info("success plot:  %s", outs.success_plot)
+    logger.info("dist plot:     %s", outs.distribution_plot)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
