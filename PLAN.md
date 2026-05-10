@@ -419,9 +419,48 @@ Course chapters per phase, written following the spec in CLAUDE.md / project gui
 chunks of length k via `LeRobotDataset(..., delta_timestamps={'action': [...]} )`. Inspect
 in Phase 2 when configuring the policies.
 
-### 8.2 SO-101 Community Dataset (TO BE FILLED IN PHASE 7)
+### 8.2 SO-101 Community Dataset (VERIFIED Phase 7, 2026-05-10)
 
-To document in Phase 7 after running `scripts/inspect_so101.py`.
+**Source:** https://huggingface.co/datasets/lerobot/svla_so101_pickplace
+**Format:** LeRobotDataset (parquet + mp4)
+**Full report:** `outputs/inspection/lerobot_svla_so101_pickplace.md`
+**Inspector:** `scripts/inspect_so101.py` (reuses Phase 1's
+`lerobot_pusht_lab.data.inspection` helpers — proves the abstraction is
+dataset-agnostic)
+
+**Top-level magnitudes:**
+
+| Property | Value |
+|---|---|
+| Total episodes | 50 |
+| Total frames | 11 939 |
+| FPS | 30 (vs PushT's 10) |
+| Frames per episode | min=183, max=306, mean=238.8, median=230 |
+| Tasks | 1 ("pink lego brick into the transparent box") |
+| Robot type | (community-recorded SO-100 follower per upstream README) |
+
+**Key differences from PushT (verified):**
+
+| Property | PushT | SO-101 |
+|---|---|---|
+| Cameras | 1 (`observation.image`) | **2** (`observation.images.up`, `observation.images.side`) |
+| Image resolution | 96 × 96 | **480 × 640** (~33× pixels) |
+| State dimensionality | 2 (xy position) | **6** (joint values, normalised ~[-100, 100]) |
+| Action dimensionality | 2 | **6** |
+| FPS | 10 | **30** |
+| State/action units | env coords (pixels) | normalised joint values |
+
+**Implications for SO-101 onboarding (when arm arrives):**
+
+- Vision encoder must handle **2 camera streams** — LeRobot supports this via
+  `use_separate_rgb_encoder_per_camera`.
+- VRAM cost is much higher per frame: 480×640 vs 96×96 = ~33× pixels per camera × 2
+  cameras = ~66× the visual data per frame. Expect to drop batch size dramatically
+  vs PushT, possibly 2-4. Multi-camera image diffusion at full res is unlikely to
+  fit on the 1650 — consider downsampling to 240×320 or using `pusht_keypoints`-
+  style state-only baseline.
+- Episode-length stats are different: SO-101 episodes are 5-10× longer in frames
+  than PushT. Action chunking horizons may need tuning.
 
 ---
 
