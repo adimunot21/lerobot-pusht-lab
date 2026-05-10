@@ -1,0 +1,53 @@
+# MLP-BC training config for lerobot/pusht.
+#
+# State-only (2D agent position) → single-step action (2D target position),
+# MSE loss. Existence rationale: baseline that *should* fail due to
+# mode-averaging — the failure is the lesson that motivates Diffusion/ACT.
+#
+# Mirrors the MLPBCConfig dataclass in src/lerobot_pusht_lab/policies/mlp_bc.py.
+# Anything overrideable from the CLI is here.
+#
+# Usage:
+#   python scripts/train_mlp_bc.py --config configs/mlp_bc_pusht.yaml [--key value]
+# Wrapped by: scripts/train_mlp_bc.py (no shell wrapper — pure Python entry point;
+# the model is small enough that there's no need for the env-var preamble that
+# scripts/train_diffusion.sh has).
+
+# ─── Dataset ────────────────────────────────────────────────────────────────
+dataset_repo_id: lerobot/pusht
+
+# ─── Architecture (PLAN.md §7 Phase 4 spec) ─────────────────────────────────
+input_dim: 2          # observation.state for PushT
+output_dim: 2         # action for PushT
+hidden_dim: 256       # ample for a 2D→2D mapping; larger doesn't help on 25K frames
+num_hidden_layers: 2  # PLAN.md spec
+dropout: 0.1          # mild regularisation
+activation: relu
+
+# ─── Optimiser ──────────────────────────────────────────────────────────────
+# Adam at lr=1e-3 — standard MLP starting point. Diffusion uses 1e-4 because
+# it has 76M params; we have ~70K. The 100× param ratio justifies the 10× lr.
+# (Note: explicit decimal `1.0e-3` not `1e-3` — PyYAML 1.2 parses the latter
+#  as a string, not a float. Same for weight_decay below.)
+optimizer_lr: 1.0e-3
+optimizer_weight_decay: 1.0e-5
+
+# ─── Training schedule ──────────────────────────────────────────────────────
+batch_size: 256       # CPU-light; can go big. PushT has 25650 frames so this is
+                      # 100 steps/epoch.
+num_workers: 4        # same as Diffusion config — uniform DataLoader across the project
+steps: 5000           # 50 epochs of the full dataset. Tiny model converges fast;
+                      # extending steps trades compute for overfitting risk.
+log_freq: 100         # 50 log points across training
+eval_freq: 1000       # 5 in-training evals
+save_freq: 1000       # 5 checkpoints; last is the deliverable for Phase 5
+seed: 1000            # match Diffusion config — same random data shuffle for fair compare
+
+# ─── Device / output ────────────────────────────────────────────────────────
+device: cuda          # GPU is overkill for ~70K params, but uniform with the
+                      # other policies. Falls back to CPU automatically if CUDA
+                      # is busy with the Diffusion training run.
+output_dir: checkpoints/mlp_bc_pusht
+
+# ─── Eval (in-training) ─────────────────────────────────────────────────────
+eval_n_episodes: 20   # Phase 5 redoes 50-episode eval with CIs across all 3 policies
