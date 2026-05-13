@@ -58,7 +58,8 @@ class EpisodeMetrics:
 
     episode_index: int
     seed: int
-    success: bool                    # max_reward ≥ success_threshold
+    success: bool                    # max_reward ≥ success_threshold (model-card criterion)
+    env_terminated_success: bool     # env's own terminated=True signal (pc_success criterion)
     max_reward: float                # peak overlap fraction reached
     sum_reward: float                # accumulated step reward across episode
     n_steps: int                     # length of episode in env steps
@@ -67,13 +68,31 @@ class EpisodeMetrics:
 
 @dataclass
 class EvalMetrics:
-    """Aggregate stats across N episodes — the comparison row for one policy."""
+    """Aggregate stats across N episodes — the comparison row for one policy.
+
+    Two success columns are reported to make the eval-criterion ambiguity explicit:
+
+      success_rate / success_ci_*
+          max_reward ≥ success_threshold (0.95) across the episode.
+          This matches the LeRobot model card's definition ("max overlap criterion").
+          More lenient: the block only needs to touch the target zone at peak.
+
+      env_success_rate / env_success_ci_*
+          The env's own terminated=True signal, equivalent to the lerobot-eval CLI's
+          pc_success metric (sustained overlap). This is the stricter criterion.
+          With gymnasium ≥ 1.0 the threshold is tighter — see LeRobot issue #470.
+
+    Never conflate the two when comparing against published numbers.
+    """
 
     policy_name: str
     n_episodes: int
-    success_rate: float              # 0..1
+    success_rate: float              # max_reward ≥ threshold (model-card criterion)
     success_ci_low: float            # Wilson 95% CI lower bound
     success_ci_high: float           # Wilson 95% CI upper bound
+    env_success_rate: float          # env terminated=True rate (pc_success criterion)
+    env_success_ci_low: float
+    env_success_ci_high: float
     avg_max_reward: float
     avg_sum_reward: float
     avg_episode_length: float
@@ -209,6 +228,7 @@ def _run_one_episode(
     max_reward = 0.0
     n_steps = 0
     inference_time_s = 0.0
+    env_terminated_success = False  # True iff the env itself raised terminated=True
 
     while True:
         t0 = time.perf_counter()
@@ -223,7 +243,14 @@ def _run_one_episode(
         max_reward = max(max_reward, float(reward))
         n_steps += 1
 
-        if terminated or truncated:
+        if terminated:
+            # gym-pusht raises terminated=True when block-target overlap has been
+            # sustained above threshold — this is the pc_success criterion used by
+            # `lerobot-eval`. It is stricter than max_reward ≥ success_threshold.
+            env_terminated_success = True
+            break
+        if truncated:
+            # Episode hit the time limit without success (env's view).
             break
         if max_steps is not None and n_steps >= max_steps:
             break
@@ -232,6 +259,7 @@ def _run_one_episode(
         episode_index=episode_index,
         seed=seed,
         success=(max_reward >= success_threshold),
+        env_terminated_success=env_terminated_success,
         max_reward=max_reward,
         sum_reward=sum_reward,
         n_steps=n_steps,
@@ -288,7 +316,9 @@ def run_evaluation(
     env.close()
 
     successes = sum(e.success for e in episodes)
+    env_successes = sum(e.env_terminated_success for e in episodes)
     ci_low, ci_high = wilson_score_interval(successes, n_episodes)
+    env_ci_low, env_ci_high = wilson_score_interval(env_successes, n_episodes)
 
     metrics = EvalMetrics(
         policy_name=policy.name,
@@ -296,6 +326,9 @@ def run_evaluation(
         success_rate=successes / n_episodes if n_episodes else 0.0,
         success_ci_low=ci_low,
         success_ci_high=ci_high,
+        env_success_rate=env_successes / n_episodes if n_episodes else 0.0,
+        env_success_ci_low=env_ci_low,
+        env_success_ci_high=env_ci_high,
         avg_max_reward=float(np.mean([e.max_reward for e in episodes])),
         avg_sum_reward=float(np.mean([e.sum_reward for e in episodes])),
         avg_episode_length=float(np.mean([e.n_steps for e in episodes])),
@@ -305,8 +338,13 @@ def run_evaluation(
         episodes=episodes,
     )
     logger.info(
-        "eval %s done: success_rate=%.1f%% [%.1f%%, %.1f%%] avg_max_reward=%.3f wall=%.1fs",
-        policy.name, 100 * metrics.success_rate, 100 * ci_low, 100 * ci_high,
+        "eval %s done:"
+        " max_overlap_success=%.1f%% [%.1f%%, %.1f%%]"
+        " pc_success=%.1f%% [%.1f%%, %.1f%%]"
+        " avg_max_reward=%.3f wall=%.1fs",
+        policy.name,
+        100 * metrics.success_rate, 100 * ci_low, 100 * ci_high,
+        100 * metrics.env_success_rate, 100 * env_ci_low, 100 * env_ci_high,
         metrics.avg_max_reward, metrics.wall_time_s,
     )
     return metrics
@@ -338,6 +376,8 @@ if __name__ == "__main__":
     metrics = run_evaluation(adapter, n_episodes=3, max_steps_per_episode=50, progress_log_interval=1)
 
     # Wilson sanity: 0/3 successes → CI should include 0 but not exceed ~70%
-    print(f"\nWilson check: 0/3 → ({metrics.success_ci_low:.3f}, {metrics.success_ci_high:.3f})")
+    print(f"\nWilson check (max_overlap): 0/3 → ({metrics.success_ci_low:.3f}, {metrics.success_ci_high:.3f})")
+    print(f"Wilson check (env pc_success): 0/3 → ({metrics.env_success_ci_low:.3f}, {metrics.env_success_ci_high:.3f})")
     assert 0.0 <= metrics.success_ci_low <= metrics.success_ci_high <= 1.0
+    assert 0.0 <= metrics.env_success_ci_low <= metrics.env_success_ci_high <= 1.0
     print("smoke test PASSED")

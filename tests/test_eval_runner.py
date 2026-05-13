@@ -213,12 +213,13 @@ class TestEvalMetricsSerialisation:
     def test_round_trip_via_save(self, tmp_path) -> None:
         import json
         ep = EpisodeMetrics(
-            episode_index=0, seed=1, success=True, max_reward=0.97,
-            sum_reward=10.0, n_steps=200, inference_time_s=0.5,
+            episode_index=0, seed=1, success=True, env_terminated_success=True,
+            max_reward=0.97, sum_reward=10.0, n_steps=200, inference_time_s=0.5,
         )
         m = EvalMetrics(
             policy_name="test", n_episodes=1, success_rate=1.0,
             success_ci_low=0.5, success_ci_high=1.0,
+            env_success_rate=1.0, env_success_ci_low=0.5, env_success_ci_high=1.0,
             avg_max_reward=0.97, avg_sum_reward=10.0,
             avg_episode_length=200, avg_inference_time_s=0.5,
             success_threshold=0.95, wall_time_s=1.0,

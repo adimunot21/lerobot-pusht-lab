@@ -56,6 +56,15 @@ export WANDB_MODE="${WANDB_MODE:-offline}"
 # still nags about missing credentials without this.
 export WANDB_SILENT="${WANDB_SILENT:-true}"
 
+# Pre-flight: verify image normalization stats before spending GPU time.
+# Simulates what lerobot-train's make_dataset() does with use_imagenet_stats and
+# prints the final mean/std the normalizer will receive. Exits non-zero if the
+# values are not ImageNet stats, aborting training before any GPU allocation.
+echo "=== Pre-flight: image normalization check ==="
+python -m lerobot_pusht_lab.training.imagenet_norm_guard configs/diffusion_pusht.yaml \
+    || { echo "ERROR: Pre-flight check failed — aborting training." >&2; exit 1; }
+echo "=== Pre-flight PASSED — starting training ==="
+
 exec lerobot-train \
     --config_path=configs/diffusion_pusht.yaml \
     "$@"

@@ -62,19 +62,28 @@ def build_markdown_report(
     if notes:
         lines.append(notes + "\n")
 
-    # Headline table
+    # Headline table — two success columns to make the criterion explicit.
+    # max_overlap: max_reward >= 0.95 anywhere in the episode (model-card criterion).
+    # pc_success:  env terminated=True (sustained overlap, lerobot-eval criterion).
     lines.append("## Headline results\n")
     lines.append(
-        "| Rank | Policy | Success rate (95% CI) | avg max_reward | "
-        "avg episode length | inference s/step |"
+        "| Rank | Policy | max_overlap success (95% CI) | pc_success (95% CI) | "
+        "avg max_reward | avg episode length | inference s/step |"
     )
-    lines.append("|---|---|---|---|---|---|")
+    lines.append("|---|---|---|---|---|---|---|")
     for i, m in enumerate(metrics, 1):
-        ci = f"{_format_pct(m.success_rate)} [{_format_pct(m.success_ci_low)}, {_format_pct(m.success_ci_high)}]"
+        mo_ci = (
+            f"{_format_pct(m.success_rate)} "
+            f"[{_format_pct(m.success_ci_low)}, {_format_pct(m.success_ci_high)}]"
+        )
+        pc_ci = (
+            f"{_format_pct(m.env_success_rate)} "
+            f"[{_format_pct(m.env_success_ci_low)}, {_format_pct(m.env_success_ci_high)}]"
+        )
         steps_per_ep = m.avg_episode_length
         s_per_step = m.avg_inference_time_s / steps_per_ep if steps_per_ep else float("nan")
         lines.append(
-            f"| {i} | `{m.policy_name}` | {ci} | {m.avg_max_reward:.3f} | "
+            f"| {i} | `{m.policy_name}` | {mo_ci} | {pc_ci} | {m.avg_max_reward:.3f} | "
             f"{steps_per_ep:.0f} | {s_per_step:.4f} |"
         )
     lines.append("")
@@ -86,8 +95,14 @@ def build_markdown_report(
         lines.append(f"- **Episodes evaluated:** {m.n_episodes}")
         lines.append(f"- **Success threshold:** max_reward ≥ {m.success_threshold:.2f}")
         lines.append(
-            f"- **Success rate:** {_format_pct(m.success_rate)} "
-            f"(Wilson 95% CI: [{_format_pct(m.success_ci_low)}, {_format_pct(m.success_ci_high)}])"
+            f"- **max_overlap success:** {_format_pct(m.success_rate)} "
+            f"(Wilson 95% CI: [{_format_pct(m.success_ci_low)}, {_format_pct(m.success_ci_high)}]) "
+            f"— matches LeRobot model-card criterion"
+        )
+        lines.append(
+            f"- **pc_success (env terminated):** {_format_pct(m.env_success_rate)} "
+            f"(Wilson 95% CI: [{_format_pct(m.env_success_ci_low)}, {_format_pct(m.env_success_ci_high)}]) "
+            f"— matches lerobot-eval CLI criterion"
         )
         lines.append(f"- **avg_max_reward:** {m.avg_max_reward:.4f}")
         lines.append(f"- **avg_sum_reward:** {m.avg_sum_reward:.4f}")
@@ -259,6 +274,7 @@ if __name__ == "__main__":
                 episode_index=i,
                 seed=100000 + i,
                 success=(mr >= 0.95),
+                env_terminated_success=(mr >= 0.95),
                 max_reward=float(mr),
                 sum_reward=float(mr * 100),
                 n_steps=200,
@@ -268,13 +284,18 @@ if __name__ == "__main__":
         ]
         from lerobot_pusht_lab.eval.runner import wilson_score_interval
         successes = sum(e.success for e in episodes)
+        env_successes = sum(e.env_terminated_success for e in episodes)
         ci_low, ci_high = wilson_score_interval(successes, n)
+        env_ci_low, env_ci_high = wilson_score_interval(env_successes, n)
         return EvalMetrics(
             policy_name=name,
             n_episodes=n,
             success_rate=successes / n,
             success_ci_low=ci_low,
             success_ci_high=ci_high,
+            env_success_rate=env_successes / n,
+            env_success_ci_low=env_ci_low,
+            env_success_ci_high=env_ci_high,
             avg_max_reward=float(np.mean([e.max_reward for e in episodes])),
             avg_sum_reward=float(np.mean([e.sum_reward for e in episodes])),
             avg_episode_length=200.0,
